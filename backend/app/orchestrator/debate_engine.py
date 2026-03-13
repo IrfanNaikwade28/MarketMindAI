@@ -40,7 +40,8 @@ from app.agents import (
 )
 from app.orchestrator.debate_state import DebateState, build_initial_state
 from app.services.content_generator import generate_content, content_to_dict
-from app.services.bluesky_service import publish_approved_content
+from app.services.bluesky_service import build_bluesky_post
+from app.services.image_service import generate_image, pick_best_image_prompt
 
 
 # ── Agent singletons (instantiated once, reused across debates) ─
@@ -411,18 +412,20 @@ class DebateOrchestrator:
 
     async def _stage_content(self, state: DebateState) -> DebateState:
         """
-        Stage 7 (optional): Content Generation + Bluesky Publishing
+        Stage 7 (optional): Content Generation + Human Approval Gate
         Runs after CMO approval.
 
         Steps:
           1. Call ContentGenerator for each target platform (all concurrent).
           2. Store all generated content dicts in state['generated_content'].
-          3. Call BlueskyService to publish the best available text to Bluesky.
-          4. Store the Bluesky publish result in state['bluesky_result'].
-          5. Emit WebSocket events for both generation and publish outcomes.
+          3. Build a rich Bluesky draft post via build_bluesky_post().
+          4. Store draft in state['pending_approval'] and emit a
+             'pending_approval' WebSocket event — then STOP.
+             The actual publish happens only after the human approves via
+             POST /debates/{session_id}/approve.
         """
         state["current_stage"] = "content_generation"
-        logger.info("Stage 7: ContentGenerator + Bluesky publishing")
+        logger.info("Stage 7: ContentGenerator + waiting for human approval")
 
         # ── Step 1 & 2: Generate platform content ───────────────
         try:
@@ -453,55 +456,69 @@ class DebateOrchestrator:
                 stage="content_generation",
             ))
 
-        # ── Step 3 & 4: Publish to Bluesky ──────────────────────
+        # ── Step 3 & 4: Build draft post and gate on human approval ─
         if content_dicts:
             try:
-                bsky_result = await publish_approved_content(content_dicts)
-                state["bluesky_result"] = {
-                    "success":      bsky_result.success,
-                    "uri":          bsky_result.uri,
-                    "cid":          bsky_result.cid,
-                    "web_url":      bsky_result.web_url,
-                    "text":         bsky_result.text,
-                    "published_at": bsky_result.published_at,
-                    "error":        bsky_result.error,
+                draft_text = await build_bluesky_post(content_dicts, state=state)
+
+                # ── Generate image upfront so it can be shown in the modal ──
+                image_b64: str = ""
+                image_prompt: str = pick_best_image_prompt(content_dicts)
+                if image_prompt:
+                    logger.info(
+                        "_stage_content | generating image for approval preview | prompt_len={}",
+                        len(image_prompt),
+                    )
+                    image_bytes = await generate_image(image_prompt)
+                    if image_bytes:
+                        import base64 as _b64
+                        image_b64 = _b64.b64encode(image_bytes).decode("ascii")
+                        logger.info(
+                            "_stage_content | image ready | b64_len={}",
+                            len(image_b64),
+                        )
+                    else:
+                        logger.warning("_stage_content | image generation returned None — no preview")
+
+                state["pending_approval"] = {
+                    "draft_post":        draft_text,
+                    "generated_content": content_dicts,
+                    "image_b64":         image_b64,
+                    "image_prompt":      image_prompt,
                 }
 
-                if bsky_result.success:
-                    logger.info("Bluesky | post published | url={}", bsky_result.web_url)
-                    state["websocket_queue"].append(_ws_event(
-                        agent_name="system",
-                        action="publish",
-                        message=f"Published to Bluesky: {bsky_result.web_url}",
-                        stage="bluesky_publish",
-                        extra={
-                            "web_url": bsky_result.web_url,
-                            "uri":     bsky_result.uri,
-                        },
-                    ))
-                else:
-                    logger.warning("Bluesky | publish skipped/failed: {}", bsky_result.error)
-                    state["websocket_queue"].append(_ws_event(
-                        agent_name="system",
-                        action="warning",
-                        message=f"Bluesky publish skipped: {bsky_result.error}",
-                        stage="bluesky_publish",
-                    ))
+                logger.info(
+                    "Human approval gate | session={} | draft_length={}",
+                    state["session_id"], len(draft_text),
+                )
+
+                state["websocket_queue"].append({
+                    "type":              "pending_approval",
+                    "stage":             "human_approval",
+                    "draft_post":        draft_text,
+                    "generated_content": content_dicts,
+                    "session_id":        state["session_id"],
+                    "image_b64":         image_b64,
+                    "timestamp":         __import__("datetime").datetime.now(
+                        __import__("datetime").timezone.utc
+                    ).isoformat(),
+                })
 
             except Exception as e:
-                logger.error("Bluesky publish stage error: {}", e)
-                state["bluesky_result"] = {"success": False, "error": str(e)}
+                logger.error("Build draft post failed: {}", e)
                 state["websocket_queue"].append(_ws_event(
                     agent_name="system",
                     action="error",
-                    message=f"Bluesky publish error: {e}",
-                    stage="bluesky_publish",
+                    message=f"Draft post build failed: {e}",
+                    stage="human_approval",
                 ))
         else:
-            state["bluesky_result"] = {
-                "success": False,
-                "error": "No content generated — Bluesky publish skipped.",
-            }
+            state["websocket_queue"].append(_ws_event(
+                agent_name="system",
+                action="warning",
+                message="No content generated — skipping human approval gate.",
+                stage="human_approval",
+            ))
 
         return state
 

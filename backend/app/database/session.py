@@ -19,15 +19,29 @@ settings = get_settings()
 
 # ── Async engine (used by FastAPI) ─────────────────────────────
 # SQLite does not support pool_size / max_overflow — use NullPool instead.
-# PostgreSQL (prod) keeps the connection pool args.
+# SQLite also only allows one writer at a time; set a generous busy_timeout
+# (30 s) via connect_args so concurrent requests wait instead of failing.
 _is_sqlite = settings.database_url.startswith("sqlite")
 
 async_engine = create_async_engine(
     settings.database_url,
     echo=settings.debug,          # logs SQL in development
     **({} if _is_sqlite else {"pool_pre_ping": True, "pool_size": 10, "max_overflow": 20}),
-    **({"poolclass": NullPool} if _is_sqlite else {}),
+    **({"poolclass": NullPool, "connect_args": {"timeout": 30}} if _is_sqlite else {}),
 )
+
+# Enable WAL mode for SQLite so readers don't block writers (and vice versa).
+# This runs once per new connection, which with NullPool means once per session.
+if _is_sqlite:
+    from sqlalchemy import event, text
+
+    @event.listens_for(async_engine.sync_engine, "connect")
+    def _set_sqlite_wal(dbapi_conn, _connection_record):
+        cursor = dbapi_conn.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA busy_timeout=30000")   # 30 s in ms
+        cursor.close()
+
 
 # ── Session factory ────────────────────────────────────────────
 AsyncSessionLocal = async_sessionmaker(

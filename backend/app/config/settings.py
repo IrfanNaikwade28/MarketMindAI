@@ -58,6 +58,14 @@ class Settings(BaseSettings):
     bluesky_handle: str = ""        # e.g. yourhandle.bsky.social
     bluesky_password: str = ""      # App password from Bluesky settings
 
+    # ── Hugging Face (Image Generation) ───────────────────────
+    hf_token: str = ""
+    hf_image_model: str = "black-forest-labs/FLUX.1-schnell"
+
+    # ── Cloudflare Workers AI (Image Generation) ───────────────
+    cf_account_id: str = ""
+    cf_api_token: str = ""
+
     # ── CORS ───────────────────────────────────────────────────
     allowed_origins: str = "http://localhost:3000,http://localhost:5173"
 
