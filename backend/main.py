@@ -8,6 +8,18 @@ FastAPI application entrypoint.
 - Configures CORS and logging
 """
 
+import sys
+import asyncio
+
+# ── Windows event loop fix ─────────────────────────────────────
+# On Windows, Python 3.8+ defaults to ProactorEventLoop which does NOT
+# support some socket operations needed by uvicorn's WebSocket handling.
+# Forcing SelectorEventLoop (the default on Linux/macOS) fixes:
+#   - WebSocket connection failures / silent hangs
+#   - "RuntimeError: no running event loop" in background tasks
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 import redis.asyncio as aioredis
 from contextlib import asynccontextmanager
 

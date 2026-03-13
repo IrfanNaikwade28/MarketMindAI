@@ -1,0 +1,38 @@
+services:
+
+  # ── Backend (FastAPI) ─────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env          # all secrets come from here — never committed
+    environment:
+      # Override DB path to use the named volume
+      DATABASE_URL: sqlite+aiosqlite:////data/ai_council.db
+    volumes:
+      - db_data:/data           # SQLite file persists across restarts
+    ports:
+      - "8000:8000"             # exposed so you can hit /docs directly if needed
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ── Frontend (React → nginx) ──────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "80:80"                 # open http://localhost in any browser
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  db_data:                      # named volume — survives docker compose down

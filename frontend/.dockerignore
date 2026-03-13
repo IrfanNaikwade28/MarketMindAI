@@ -1,0 +1,16 @@
+# Dependencies — reinstalled inside image
+node_modules/
+
+# Previous builds
+dist/
+.vite/
+
+# Dev tooling
+.eslintcache
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
