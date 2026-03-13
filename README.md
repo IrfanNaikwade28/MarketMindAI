@@ -2,6 +2,11 @@
 
 A full-stack hackathon project that simulates a complete AI marketing team. Six specialized AI agents debate social media strategy in real time, reach a consensus, generate platform-specific content with an **AI-generated image**, and publish to **Bluesky** after a human approval step.
 
+## Demo Video
+https://github.com/user-attachments/assets/e5627675-023c-4c5a-88fe-65390ad8fa40
+
+---
+
 ## What It Does
 
 You provide a brand name, campaign goal, and a brief. The AI Council then:
